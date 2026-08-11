@@ -1,0 +1,118 @@
+/*
+==============================================================================
+  PoC 02 -- full exploitation chain: a cleartext key proved secret
+==============================================================================
+
+  CLASS      : missed attack (false "verified")
+  SEVERITY   : critical -- end-to-end wrong security verdict, fully green report
+  AFFECTS    : tamarin-prover 1.12.0 and develop HEAD (1.13.0)
+
+  ---------------------------------------------------------------------------
+  WHAT THIS ADDS OVER PoC 01
+  ---------------------------------------------------------------------------
+  PoC 01 needs an explicit [use_induction] annotation, which a reviewer might
+  notice.  This one does not.
+
+  Two facts combine into a whole-theory compromise:
+
+    1. `[sources]` implies UseInduction with no annotation from the user
+       (lib/theory/src/ClosedTheory.hs:120):
+
+           inductionHint
+             | any (`elem` [SourceLemma, InvariantLemma]) (get lAttributes l)
+                 = UseInduction
+
+    2. `[sources]` lemmas are consumed by `refineWithSourceAsms` at
+       theory-close time (lib/theory/src/CloseRule.hs:426), i.e. BEFORE any
+       proof runs, and the refined sources are then used by EVERY lemma in the
+       theory.
+
+  So a single misclassified restriction (PoC 01) silently "proves" a false
+  sources lemma, which in turn prunes legitimate sources out of the
+  precomputation for the entire file.
+
+  ---------------------------------------------------------------------------
+  GROUND TRUTH
+  ---------------------------------------------------------------------------
+  `Gen` outputs the fresh key k directly on the public channel via Out(k).
+  The adversary trivially learns it.  `secrecy` is FALSE.
+  `bogus_sources` is FALSE.
+
+  ---------------------------------------------------------------------------
+  TAMARIN SAYS
+  ---------------------------------------------------------------------------
+    bogus_sources (all-traces):   verified (3 steps)   <-- WRONG
+    secrecy       (all-traces):   verified (2 steps)   <-- WRONG
+    gen_reachable (exists-trace): verified (2 steps)
+    /* All wellformedness checks were successful. */
+
+  In the proof output, `secrecy` closes with `by solve( !KU( ~n ) @ #j )`:
+  the false sources refinement removed the only case that mattered.
+
+  ---------------------------------------------------------------------------
+  WHY THIS IS THE INTERESTING RESULT
+  ---------------------------------------------------------------------------
+  Every hygiene signal a Tamarin user is taught to rely on comes back green:
+
+    * wellformedness report is clean
+    * no `sorry` anywhere in the proof
+    * the `exists-trace` liveness witness confirms the model is NOT vacuous
+    * no lemma is reported falsified, so nothing looks suspicious in the
+      summary
+
+  There is no signal available to the user, at any verbosity, that the
+  verdict is wrong.
+
+  ---------------------------------------------------------------------------
+  NOTE ON THE RESTRICTION -- AND HONEST SCOPE
+  ---------------------------------------------------------------------------
+  `GenIsNotLast` is written the way a modeller naturally expresses "the
+  protocol does not stop right after key generation".  `last()` is documented
+  user-facing syntax (manual/src/011_advanced-features.md:576).
+
+  HOWEVER -- and this bounds the practical impact, so do not overstate it in
+  the paper:
+
+    NO SHIPPED CASE STUDY IS AFFECTED.
+
+  We scanned all 1042 .spthy files under examples/.  36 contain the string
+  "last(".  In every one of them the occurrence is inside Tamarin's OWN
+  machine-generated proof text (lines such as
+  `solve( (last(#i)) | (Ex #j. Update(k,r) @ #j & ...) )`, emitted by the
+  induction rule and saved into the analyzed output), never in a
+  user-written restriction.  Zero case studies put `last()` in a restriction,
+  which is what this bug requires.
+
+  So the correct claim is: this is a live, reachable unsoundness in documented
+  syntax that currently affects no published Tamarin result.  It is a trap
+  waiting for a user, not evidence that existing verification results are
+  wrong.  (Scanner: attacks/tools/lastscan.py.)
+
+  See attacks/01_last_induction_unsound.spthy for the root cause analysis and
+  the control experiment that isolates the mechanism.
+==============================================================================
+*/
+
+theory LastSourcesChain begin
+
+rule Gen:  [ Fr(k) ] --[ Gen(k)  ]-> [ Out(k) ]
+rule Recv: [ In(x)  ] --[ Recv(x) ]-> [        ]
+
+// Misclassified as "// safety formula" by isSafetyFormula.
+restriction GenIsNotLast:
+  "All k #i. Gen(k) @ i ==> not(last(#i))"
+
+// FALSE. [sources] implies use_induction, so the unsound induction proves it,
+// and it is fed into source refinement for every lemma below.
+lemma bogus_sources [sources]:
+  "All k #i. Gen(k) @ i ==> F"
+
+// FALSE: k is sent in the clear by rule Gen.
+lemma secrecy:
+  "All k #i #j. Gen(k) @ i & KU(k) @ j ==> F"
+
+// Sanity check: the model is not degenerate.
+lemma gen_reachable: exists-trace
+  "Ex k #i. Gen(k) @ i"
+
+end

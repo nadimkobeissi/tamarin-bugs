@@ -1,0 +1,95 @@
+/*
+==============================================================================
+  PoC 03 -- the vacuity wellformedness checks are dead code
+==============================================================================
+
+  CLASS      : missed attack (vacuous "verified", no warning)
+  SEVERITY   : high -- Tamarin's only guard against the most common modelling
+                       error is unreachable
+  AFFECTS    : tamarin-prover 1.12.0 and develop HEAD (1.13.0)
+
+  ---------------------------------------------------------------------------
+  ROOT CAUSE
+  ---------------------------------------------------------------------------
+  lib/theory/src/Theory/Tools/Wellformedness.hs:578-583
+
+      -- | Report on facts usage. Skip checks on non-existant actions if
+      -- `incompleteMSRs` is True.
+      factReports incompleteMSRs thy =
+          concat [ reservedReport, ..., factUsage, factLhsOccurNoRhs ]
+          ++ concat [ inexistentActions ++ inexistentActionsRestrictions
+                    | incompleteMSRs ]
+
+  The list-comprehension guard is the INVERSE of its own docstring: it
+  INCLUDES the checks when `incompleteMSRs` is True and skips them when it is
+  False.  And the only production call site hardcodes False --
+  src/Main/TheoryLoader.hs:602:
+
+      incompleteMSRs = False
+        -- TODO how do we know if we do not have all MSRs due to translation?
+
+  Net effect: `inexistentActions` and `inexistentActionsRestrictions`
+  (Wellformedness.hs:706-734) never execute in the shipped tool.  They are
+  fully implemented, with error messages, and unreachable.
+
+  ---------------------------------------------------------------------------
+  REGRESSION PROVENANCE
+  ---------------------------------------------------------------------------
+      git log -L 583,583:lib/theory/src/Theory/Tools/Wellformedness.hs
+
+  pins the guard to commit 98c3887f, "Extend ProVerif export module (#725)".
+  Before that PR both checks were unconditional members of `factReports`:
+
+      factReports thy = concat
+          [ reservedReport, reservedFactNameRules, freshFactArguments,
+            specialFactsUsage, factUsage, factLhsOccurNoRhs,
+            inexistentActions, inexistentActionsRestrictions ]
+
+  An unrelated export-backend refactor silently disabled a working soundness
+  guardrail.
+
+  ---------------------------------------------------------------------------
+  GROUND TRUTH
+  ---------------------------------------------------------------------------
+  No rule in this theory ever emits `SecrettKey`.  `secrecy_typo` therefore
+  quantifies over an empty set and is vacuously true -- it asserts nothing.
+  The property the modeller meant to state (`secrecy_intended`) is false.
+
+  ---------------------------------------------------------------------------
+  TAMARIN SAYS
+  ---------------------------------------------------------------------------
+    secrecy_typo     (all-traces): verified (2 steps)   <-- vacuous
+    secrecy_intended (all-traces): falsified - found trace (3 steps)
+    /* All wellformedness checks were successful. */
+
+  `--quit-on-warning` does NOT help: no warning is produced at all, because
+  the check that would produce it never runs.
+
+  ---------------------------------------------------------------------------
+  SUGGESTED FIX
+  ---------------------------------------------------------------------------
+  Invert the guard to match the docstring:
+
+      ++ concat [ inexistentActions ++ inexistentActionsRestrictions
+                | not incompleteMSRs ]
+
+  (and resolve the TODO at TheoryLoader.hs:602 so translated theories set the
+  flag correctly rather than always False).
+==============================================================================
+*/
+
+theory VacuousLemmaTypo begin
+
+rule Setup: [ Fr(k)   ] --[ SecretKey(k) ]-> [ Key(k) ]
+rule Leak:  [ Key(k)  ] --[ Leaked(k)    ]-> [ Out(k) ]
+
+// TYPO: the rules emit "SecretKey", this lemma says "SecrettKey".
+// No rule has such an action, so the lemma is vacuously true.
+lemma secrecy_typo:
+  "All k #i. SecrettKey(k) @ i ==> not(Ex #j. K(k) @ j)"
+
+// The property that was actually intended. Correctly falsified.
+lemma secrecy_intended:
+  "All k #i. SecretKey(k) @ i ==> not(Ex #j. K(k) @ j)"
+
+end

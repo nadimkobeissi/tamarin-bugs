@@ -1,0 +1,10 @@
+author:
+  name: Nadim Kobeissi
+  surname: Kobeissi
+  affil: 1
+  email: nadim@symbolic.software
+affiliation:
+  name: Symbolic Software
+version: preprint
+title: It's Good to Be Humble: Tamarin Prover's Soundness Versus One Evening with an LLM
+keywords: formal verification, protocol analysis, soundness, Tamarin, tool assurance, LLM-assisted auditing

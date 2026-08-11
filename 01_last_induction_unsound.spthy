@@ -1,0 +1,150 @@
+/*
+==============================================================================
+  PoC 01 -- `last()` defeats the safety-formula classifier => unsound induction
+==============================================================================
+
+  CLASS      : missed attack (false "verified")
+  SEVERITY   : critical -- unsound proof rule
+  AFFECTS    : tamarin-prover 1.12.0 and develop HEAD (1.13.0)
+
+  ---------------------------------------------------------------------------
+  ROOT CAUSE
+  ---------------------------------------------------------------------------
+  lib/theory/src/Theory/Constraint/System.hs:849-856
+
+      (safetyRestrictions, otherRestrictions) = partition isSafetyFormula restrictions
+      -- Non-safety restrictions must be added to the formula, as they render
+      -- the set of traces non-prefix-closed, which makes the use of induction
+      -- unsound.
+      gf2 = gconj $ gf1 : otherRestrictions
+
+  The classifier this depends on is
+  lib/theory/src/Theory/Constraint/System/Guarded.hs:156-164
+
+      isSafetyFormula gf0 = null (frees [gf0]) && noExistential gf0
+        where
+          noExistential (GAto _)            = True     -- <-- accepts Last atoms
+          noExistential (GGuarded Ex _ _ _) = False
+          ...
+
+  "Closed and existential-free" is not the same as "prefix-closed".  The atom
+  `last(#i)` is part of the surface syntax
+  (lib/theory/src/Theory/Text/Parser/Formula.hs:46) and contains no
+  existential quantifier, so a restriction built from `not(last(#i))` is
+  misclassified as a safety restriction.  It is then routed into `sLemmas`
+  instead of being conjoined into the proof obligation before `ginduct` runs,
+  and the induction hypothesis is asserted over trace prefixes that are not
+  themselves valid traces of the restricted system.
+
+  ---------------------------------------------------------------------------
+  WHY THE RESTRICTION BELOW IS NOT A SAFETY FORMULA
+  ---------------------------------------------------------------------------
+  Guarded.hs defines a safety formula as one where "a trace violating it can
+  never be extended to a trace satisfying it".  Take:
+
+      t1 = [Start(x)]              -- Start IS the last event  => VIOLATES
+      t2 = [Start(x), Step(x)]     -- Start is not last        => SATISFIES
+
+  t1 is a prefix of t2, so a violating trace extends to a satisfying one.
+  Not a safety formula.  Tamarin nevertheless prints "// safety formula"
+  beside it in the output.
+
+  ---------------------------------------------------------------------------
+  GROUND TRUTH
+  ---------------------------------------------------------------------------
+  Both lemmas below are the SAME formula and both are FALSE: the trace
+  [Start(x), Step(x)] satisfies the restriction and contains a Start event.
+
+  ---------------------------------------------------------------------------
+  TAMARIN SAYS
+  ---------------------------------------------------------------------------
+    NoStart_with_induction    (all-traces): verified (3 steps)     <-- WRONG
+    NoStart_without_induction (all-traces): falsified - found trace (2 steps)
+    StartReachable            (exists-trace): verified (2 steps)
+    /* All wellformedness checks were successful. */
+
+  ---------------------------------------------------------------------------
+  CONTROL EXPERIMENT (isolates the mechanism)
+  ---------------------------------------------------------------------------
+  attacks/01b_control_existential_phrasing.spthy is the SAME protocol and the
+  SAME lemma, with the restriction expressed as a guarded existential:
+
+      restriction StartImpliesStep:
+        "All x #i. Start(x) @ i ==> Ex #j. Step(x) @ j"
+
+  This is also non-prefix-closed -- [Start(x)] violates it, [Start(x),Step(x)]
+  satisfies it -- but the existential makes isSafetyFormula return False, so
+  Tamarin conjoins it into the proof obligation instead.  Result:
+
+      last phrasing         : NoStart_with_induction -> verified   (WRONG)
+      existential phrasing  : NoStart_with_induction -> falsified  (correct)
+
+  Same protocol, same lemma, both restrictions non-prefix-closed.  The only
+  difference is which side of `partition isSafetyFormula` they land on.  This
+  rules out any alternative explanation for the wrong verdict.
+
+  (An exactly equivalent phrasing "Ex #j. #i < #j" is rejected by Tamarin as
+  an unguarded existential, which is why the control uses a Step action as the
+  guard.)
+
+  ---------------------------------------------------------------------------
+  PROVENANCE
+  ---------------------------------------------------------------------------
+  This is a re-entry of soundness bug #108 (Simon Meier, 2012).  Commit
+  a32cc3f8 added the original counterexample
+  (examples/loops/Axioms_and_Induction.spthy, which uses a non-safety
+  restriction with an EXISTENTIAL); commit 9726e4c4 "fixed two soundness bugs"
+  introduced `isSafetyFormula` as the fix.
+
+  Verified rigorously:
+
+    * The body of `isSafetyFormula` at 9726e4c4 (src/Theory/Constraint/System/
+      Guarded.hs) and at HEAD (lib/theory/src/.../Guarded.hs) are BYTE
+      IDENTICAL.  The predicate has never been modified.
+
+    * `last` was already surface syntax in that same commit: 9726e4c4's
+      src/Theory/Text/Parser.hs:340 contains
+          [ Last <$> try (symbol "last" *> parens nodevarTerm) <?> "last atom"
+
+  So the fix and the hole shipped together in August 2012, and the hole has
+  been open for the entire lifetime of the fix.
+
+  SCOPE: no shipped case study is affected -- see the honest-scope note in
+  attacks/02_last_sources_full_chain.spthy.  This is a reachable trap, not
+  evidence that published Tamarin results are wrong.
+
+  ---------------------------------------------------------------------------
+  SUGGESTED FIX
+  ---------------------------------------------------------------------------
+  One line in Guarded.hs:
+
+      noExistential (GAto (Last _)) = False
+
+  `toInductionHypothesis` already refuses formulas containing `last`
+  (Guarded.hs:619, "formula not last-free"), so reclassifying simply makes
+  induction inapplicable to theories carrying such a restriction, which is the
+  correct behaviour.
+==============================================================================
+*/
+
+theory LastInductionUnsound begin
+
+rule Start: [ Fr(x) ] --[ Start(x) ]-> [ A(x) ]
+rule Step:  [ A(x)  ] --[ Step(x)  ]-> [      ]
+
+restriction StartIsNotLast:
+  "All x #i. Start(x) @ i ==> not(last(#i))"
+
+// FALSE. Tamarin proves it because [use_induction] triggers the unsound rule.
+lemma NoStart_with_induction [use_induction]:
+  "All x #i. Start(x) @ i ==> F"
+
+// The identical formula without induction. Correctly falsified.
+lemma NoStart_without_induction:
+  "All x #i. Start(x) @ i ==> F"
+
+// Sanity check: the model is not degenerate, Start really is reachable.
+lemma StartReachable: exists-trace
+  "Ex x #i. Start(x) @ i"
+
+end

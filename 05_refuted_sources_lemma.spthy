@@ -1,0 +1,78 @@
+/*
+==============================================================================
+  PoC 05 -- a REFUTED [sources] lemma still taints the precomputation
+==============================================================================
+
+  CLASS      : missed attack (false "verified" derived from a refuted premise)
+  SEVERITY   : high -- blast radius is the whole theory, not one lemma
+  AFFECTS    : tamarin-prover 1.12.0 and develop HEAD (1.13.0)
+
+  ---------------------------------------------------------------------------
+  ROOT CAUSE
+  ---------------------------------------------------------------------------
+  Same missing precondition as PoC 04, but on a hotter path.  `[sources]`
+  lemmas are collected and applied during theory closing, before any proof
+  runs -- lib/theory/src/CloseRule.hs:402-426:
+
+      closeRuleCache parameters restrictions typAsms forcedInjFacts ... =
+        ...
+        rawSources     = precomputeSources parameters ctxt0 safetyRestrictions
+        refinedSources = refineWithSourceAsms parameters typAsms ctxt0 rawSources
+
+  `typAsms` are the [sources] lemma formulas.  They are consumed
+  unconditionally: there is no point in the pipeline at which a failed
+  sources-lemma proof invalidates `refinedSources`, and `refinedSources` is
+  what every non-[sources] lemma in the file is proved against
+  (ClosedTheory.hs:116-118).
+
+  This is by design -- sources lemmas are meant to be discharged separately --
+  but the design has no failure path.  When the discharge fails, the already
+  computed refinement stands and nothing downstream is re-checked or flagged.
+
+  ---------------------------------------------------------------------------
+  GROUND TRUTH
+  ---------------------------------------------------------------------------
+  `bogus_sources` claims the adversary never derives anything (`KU(x) ==> F`),
+  which is false in any theory with a public channel.  `target` is false
+  because `Gen` outputs k in the clear.
+
+  ---------------------------------------------------------------------------
+  TAMARIN SAYS
+  ---------------------------------------------------------------------------
+    bogus_sources (all-traces): falsified - found trace (2 steps)
+    target        (all-traces): verified (2 steps)      <-- WRONG
+
+  ---------------------------------------------------------------------------
+  RELATED: --auto-sources
+  ---------------------------------------------------------------------------
+  The same path is taken by machine-generated sources lemmas
+  (lib/theory/src/OpenTheory.hs:138 `addAutoSourcesLemma`, reached from
+  CloseRule.hs:58 when `--auto-sources` is passed and the theory has partial
+  deconstructions).  There the user did not even write the assumption their
+  results now rest on.  Worth checking as a follow-up.
+
+  ---------------------------------------------------------------------------
+  COMPARE
+  ---------------------------------------------------------------------------
+  attacks/02_last_sources_full_chain.spthy is the strictly worse version of
+  this: there the sources lemma is *wrongly proved* rather than falsified, so
+  the user gets no "falsified" line to notice at all.
+==============================================================================
+*/
+
+theory RefutedSourcesLemma begin
+
+functions: h/1
+
+rule Gen: [ Fr(k) ] --[ Gen(k)  ]-> [ Out(k) ]
+rule Rcv: [ In(x)  ] --[ Rcv(x)  ]-> [        ]
+
+// FALSE sources lemma: claims the adversary never constructs anything.
+lemma bogus_sources [sources]:
+  "All x #j. KU(x) @ j ==> F"
+
+// FALSE: k is sent on the public channel.
+lemma target:
+  "All k #i #j. Gen(k) @ i & KU(k) @ j ==> F"
+
+end

@@ -1,0 +1,1155 @@
+%% ====================================================================
+%%  It's Good to Be Humble:
+%%  Tamarin Prover's Soundness Versus One Evening with an LLM
+%%
+%%  Build: tectonic -X compile humble.tex
+%% ====================================================================
+\newif\ifanonymous
+\anonymousfalse
+
+\documentclass[version=preprint]{iacrcc}
+
+%% iacrcc already loads amsmath, amssymb, amsthm, mathtools, microtype,
+%% hyperref, tikz and graphicx.
+\usepackage{fontspec}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage{xcolor}
+\usepackage{listings}
+\usetikzlibrary{positioning,calc,fit,arrows.meta,backgrounds}
+\PassOptionsToPackage{hidelinks}{hyperref}
+
+% Workaround: iacrcc.cls sets the bibliography's PDF anchor with \pdfdest, a
+% pdfTeX primitive undefined under XeTeX (which Tectonic uses).
+\ifdefined\pdfdest\else
+  \def\pdfdest name#1XYZ{}%
+\fi
+
+%% --- Fonts --------------------------------------------------------------
+%% Fall back gracefully if Berkeley Mono is not installed on the build host.
+\IfFontExistsTF{Berkeley Mono}{%
+  \setmonofont{Berkeley Mono}[Scale=MatchLowercase]%
+}{%
+  \setmonofont{DejaVu Sans Mono}[Scale=MatchLowercase]%
+}
+
+%% --- Loose-line tolerance ------------------------------------------------
+\setlength{\emergencystretch}{3em}
+\tolerance=2000
+\hbadness=10000
+\vbadness=10000
+
+%% --- Float packing --------------------------------------------------------
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.65}
+\renewcommand{\textfraction}{0.05}
+\renewcommand{\floatpagefraction}{0.88}
+\setcounter{topnumber}{3}
+\setcounter{totalnumber}{5}
+
+%% --- Palette --------------------------------------------------------------
+\definecolor{tink}{HTML}{1A1A1A}   % ink
+\definecolor{tsoft}{HTML}{6B6B6B}  % secondary text, comments
+\definecolor{tline}{HTML}{9A9A9A}  % rules
+\definecolor{thot}{HTML}{A35C3A}   % unsound, wrong verdict
+\definecolor{tgood}{HTML}{2F6B4F}  % sound, correct verdict
+\definecolor{tkey}{HTML}{2B4C7E}   % language keywords
+\definecolor{tprim}{HTML}{1F6B70}  % primitives, facts
+\definecolor{twash}{HTML}{F4F2EE}  % listing background
+
+%% --- Listings -------------------------------------------------------------
+\lstdefinestyle{tbase}{
+  basicstyle=\ttfamily\footnotesize\color{tink},
+  keywordstyle=\color{tkey}\bfseries,
+  keywordstyle=[2]\color{tprim},
+  keywordstyle=[3]\color{thot}\bfseries,
+  commentstyle=\color{tsoft}\itshape,
+  stringstyle=\color{tgood},
+  backgroundcolor=\color{twash},
+  frame=leftline,
+  framerule=0.8pt,
+  rulecolor=\color{tline},
+  framexleftmargin=4pt,
+  xleftmargin=6pt,
+  breaklines=true,
+  breakatwhitespace=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  upquote=true,
+  aboveskip=6pt,
+  belowskip=4pt,
+}
+
+\lstdefinelanguage{TamarinL}{
+  morekeywords={theory,begin,end,rule,lemma,restriction,builtins,functions,
+    equations,All,Ex,let,in,exists-trace,all-traces,not,macros,predicates},
+  morekeywords=[2]{Fr,In,Out,K,KU,senc,sdec,aenc,adec,h,pk,last},
+  morekeywords=[3]{reuse,sources,use_induction},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+}
+
+\lstdefinelanguage{HaskellL}{
+  morekeywords={where,let,in,do,case,of,if,then,else,data,type,instance,
+    guard,return,concat,null},
+  sensitive=true,
+  morecomment=[l]{--},
+  morecomment=[s]{\{-}{-\}},
+}
+
+\lstnewenvironment{tmlisting}[1][]{\lstset{style=tbase,language=TamarinL,#1}}{}
+\lstnewenvironment{hslisting}[1][]{\lstset{style=tbase,language=HaskellL,#1}}{}
+\lstnewenvironment{outlisting}[1][]{\lstset{style=tbase,language={},#1}}{}
+
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\tmc}[1]{\lstinline[style=tbase,language=TamarinL,
+  backgroundcolor=\color{white},frame=none,basicstyle=\ttfamily\small]|#1|}
+
+\setlist{topsep=3pt,parsep=0pt,itemsep=2pt}
+
+%% --- Theorem-like ---------------------------------------------------------
+\theoremstyle{definition}
+\newtheorem{observation}{Observation}
+\theoremstyle{remark}
+\newtheorem{finding}{Finding}
+
+\title[running   = {It's Good to Be Humble},
+       plaintext = {It's Good to Be Humble: Tamarin Prover's Soundness Versus One Evening with an LLM}
+      ]{It's Good to Be Humble:\\Tamarin Prover's Soundness Versus\\One Evening with an LLM}
+
+\ifanonymous
+  \addauthor[inst={1}]{Anonymous Author}
+  \addaffiliation{Anonymous Affiliation}
+\else
+  \addauthor[inst    = {1},
+             email   = {nadim@symbolic.software},
+             surname = {Kobeissi}
+            ]{Nadim Kobeissi}
+  \addaffiliation{Symbolic Software}
+\fi
+
+\begin{document}
+\maketitle
+
+\keywords{formal verification, protocol analysis, soundness, Tamarin, tool
+assurance, LLM-assisted auditing}
+
+\begin{abstract}
+The Tamarin prover is among the most theoretically developed tools in symbolic protocol analysis, and it has been used to certify TLS 1.3, 5G-AKA, EMV and Signal. We report five defects in Tamarin 1.12.0 and on the current \code{develop} branch that cause it to return wrong verdicts, all found in a single evening of LLM-assisted auditing by one person who is not a Tamarin developer.
+
+Three defect families survive scrutiny. First, the predicate that decides whether a restriction is a safety formula accepts formulas containing the \code{last()} atom, which are not prefix-closed. This makes Tamarin's induction rule unsound: we exhibit one lemma that Tamarin reports \emph{verified} with induction and \emph{falsified} without, and, by chaining through a \code{[sources]} annotation, a protocol that publishes its key with \tmc{Out(k)} whose secrecy Tamarin reports as verified under a clean wellformedness report. The predicate is byte-identical to the 2012 commit that introduced it to fix bug \#108, and the \code{last} atom was already surface syntax in that same commit. The hole and the fix shipped together, and the hole has been open for fourteen years. Second, the wellformedness checks that catch a lemma quantifying over an action fact no rule emits sit behind a guard that inverts their own docstring, and behind a flag hardcoded to \code{False}; they have not executed since a ProVerif export refactor in PR \#725. Third, lemmas annotated \code{[reuse]} and \code{[sources]} are admitted as assumptions with no check that they were ever proved, and the assumption constrains both trace quantifiers, so one theory makes Tamarin report \emph{found trace} and \emph{no trace found} for the same statement in one summary block.
+
+We report with equal care what we could not break. Tamarin's constraint solver, its term algebra over exclusive-or, Diffie-Hellman, multisets and natural numbers, its newest monotonicity inference, and its stored-proof replay all resisted every probe we aimed at them. The defects are not in the hard part. Every one sits in the trust boundary around the solver, where a check is skipped rather than an inference drawn wrongly. That is the uncomfortable result: the sophistication is real and the guardrails around it are thin, and an evening was enough to find that out.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+
+Tamarin~\cite{TamarinCAV,TamarinCSF} is a symbolic protocol verifier with
+unbounded sessions, user-definable equational theories, support for stateful
+protocols, and a constraint-solving procedure with published soundness and
+completeness arguments. It is the tool of record for several of the most
+consequential protocol analyses of the last decade: TLS 1.3~\cite{TLS13},
+5G-AKA~\cite{FiveG}, EMV~\cite{EMV}, and others. When a standards body wants a
+machine-checked argument that a protocol meets its goals, Tamarin is one of two
+or three tools, alongside ProVerif~\cite{ProVerif}, that can supply one.
+
+This paper reports five defects that make Tamarin return wrong answers. All
+were found in a single evening by one person, working with a
+general-purpose large language model as an auditing assistant, on a machine
+with no Tamarin build toolchain installed. We did not read the Tamarin papers
+in preparation. We did not have prior familiarity with the constraint-solving
+implementation. What we had was the source tree, a stock binary from Homebrew,
+and about six hours.
+
+We want to be precise about what that does and does not show, because the
+temptation to overclaim here is considerable and we have tried to resist it in
+both directions.
+
+It does not show that Tamarin is a bad tool, or that its theory is wrong, or
+that published Tamarin results are unreliable. Section~\ref{sec:held} reports
+at length on the parts we attacked and failed to break, and that list is longer
+than the list of defects. Nor does the \code{last()} unsoundness invalidate any
+published case study: we scanned all 1042 models shipped with Tamarin and none
+of them uses the construct in the position that triggers the bug
+(\S\ref{sec:scope}).
+
+What it does show is an asymmetry. Tamarin has been developed for over a
+decade by a group with deep expertise, and the machinery that group built held
+up under everything we threw at it. The defects we found are all in the layer
+around that machinery: whether a formula was classified correctly before being
+handed to the solver, whether a wellformedness check runs at all, whether a
+lemma admitted as an assumption was ever proved. Those checks are one-line
+predicates and list comprehensions. None of them requires a PhD to audit. One
+of them has been wrong since August 2012.
+
+\subsection{Why the cost matters}
+
+Finding a soundness bug in a verification tool has historically been expensive.
+It has usually meant a researcher with the relevant background, motivated by a
+specific suspicion, spending days or weeks. That cost is why tool assurance has
+been treated as something that happens occasionally, on purpose, by specialists.
+
+The cost has changed. The audit reported here consisted of reading source with
+an assistant that could hold the whole call graph in view, forming hypotheses
+about which predicates were load-bearing, and testing each hypothesis with a
+ten-line model file. The assistant did not find the bugs by magic and it
+proposed several theories that turned out to be wrong (\S\ref{sec:method}
+describes two). What it changed was the iteration rate. Reading
+\code{isSafetyFormula}, noticing that \code{Last} atoms pass a test named for
+existentials, and writing the model that exploits it took under twenty minutes.
+
+If one evening at this cost yields five defects in the most theoretically
+developed tool in the field, the reasonable inference is not that this
+particular tool is unusually broken. It is that the assumption underneath the
+whole practice, that tools of this pedigree have been audited to a depth
+proportional to the trust placed in them, was never tested at a cost anyone
+could afford. Now it can be.
+
+\subsection{Contributions}
+
+\begin{itemize}
+  \item Three confirmed defect families in Tamarin 1.12.0 and on
+    \code{develop} at \code{ef3f0468}, each reduced to a self-contained model
+    file of at most fifteen lines, each accompanied by a control that isolates
+    its mechanism (\S\ref{sec:last}, \S\ref{sec:vacuity}, \S\ref{sec:reuse}).
+  \item A fourteen-year provenance analysis of the first defect, establishing
+    by direct comparison of commit contents that the flawed predicate is
+    byte-identical to the one introduced in 2012 to fix the same class of bug,
+    and that the syntax which defeats it was already available in that commit
+    (\S\ref{sec:provenance}).
+  \item A ground-truth-free auditing method (\S\ref{sec:oracles}) in which a
+    tool is caught contradicting itself rather than contradicting a reference
+    answer, which is what makes the third defect checkable by a reader who
+    knows nothing about the protocol under analysis.
+  \item A deliberate account of what resisted attack (\S\ref{sec:held}),
+    including the constraint solver, the term algebra, and stored-proof replay,
+    which is what locates the defects precisely rather than smearing suspicion
+    across the tool.
+  \item An artifact: seven model files, a runner that exits non-zero if any
+    defect stops reproducing, and two analysis scripts (\S\ref{sec:artifact}).
+\end{itemize}
+
+\section{What a Tamarin user is entitled to assume}\label{sec:background}
+
+Tamarin analyzes protocols specified as multiset rewriting rules over a term
+algebra, in the Dolev-Yao model~\cite{DolevYao}. A rule consumes facts, emits
+action facts onto a trace, and produces facts. Security properties are
+first-order formulas over that trace, written as lemmas. The prover answers
+\code{verified} or \code{falsified} for each lemma, or reports that its analysis
+is incomplete.
+
+Three features of the input language matter for what follows.
+
+\emph{Restrictions} constrain the set of traces under consideration. A
+restriction is a closed formula, and Tamarin analyzes only those traces that
+satisfy it. Restrictions are how modellers express equality tests, uniqueness
+of identifiers, and ordering assumptions that the rule language cannot state
+directly.
+
+\emph{Lemma annotations} change how a lemma participates in the analysis. A
+lemma marked \code{[reuse]} is used as an assumption when proving the lemmas
+that follow it. A lemma marked \code{[sources]} is consumed earlier still: it
+refines the precomputed case distinctions that every other lemma is proved
+against. A lemma marked \code{[use\_induction]} is proved by induction over the
+trace rather than by the default simplification.
+
+\emph{Wellformedness checks} run before analysis and report modelling errors:
+facts used with inconsistent arity, reserved names, unbound variables. They are
+the tool's own account of what it thinks is wrong with your model.
+
+A user who writes a model, sees a clean wellformedness report, sees no lemma
+reported as falsified, sees no \code{sorry} in the proof, and includes an
+\code{exists-trace} lemma to confirm the model is not vacuous has done
+everything the manual~\cite{TamarinManual} asks. Section~\ref{sec:last} exhibits a model that passes
+every one of those checks and whose secrecy verdict is wrong.
+
+\section{Method: one evening, and what the assistant actually did}\label{sec:method}
+
+The audit ran on a MacBook with Tamarin 1.12.0 from Homebrew and Maude 3.5.1.
+The Tamarin source tree was checked out at \code{develop} commit
+\code{ef3f0468} (cabal version 1.13.0). No Haskell toolchain was installed, so
+we could not build a modified Tamarin; every hypothesis had to be tested
+against the stock binary using model files alone. That constraint turned out to
+be useful, because it forced every finding into a form a user could reproduce.
+
+The working loop was: read a region of source with the assistant, identify
+predicates whose correctness the rest of the pipeline depends on, and for each
+one ask what input would make it wrong. Then write a model that supplies that
+input.
+
+Two things are worth saying plainly about the assistant's role, since the
+paper's thesis rests on it.
+
+It was not an oracle. Several hypotheses it proposed were wrong, and the
+wrongness only surfaced under test. It suggested that Tamarin's goal-ranking
+oracles might prune the search unsoundly; reading \code{oracleRanking} showed
+that goals the oracle omits are appended rather than dropped, so the search
+cannot lose them. It suggested that a heuristic in observational-equivalence
+mode might report attacks on unclosed constraint systems; the code supports
+that reading, but we could not construct a witness, and \S\ref{sec:held}
+reports it as an open lead rather than a finding.
+
+What it did supply was breadth at speed. A single reader can hold one
+hypothesis about one file. Working this way we examined the restriction
+classifier, the wellformedness gate, the lemma-dependency machinery, the goal
+manager, the injective-fact inference, the macro and predicate expanders, the
+proof replay path, and the equational front end, and tested a hypothesis
+against each. Most produced nothing. The ones that produced something are
+\S\S\ref{sec:last}--\ref{sec:reuse}.
+
+\subsection{Oracles that need no ground truth}\label{sec:oracles}
+
+A recurring difficulty in auditing a verifier is that checking its answer
+requires knowing the answer, which usually means trusting a second tool or a
+hand proof. We used two invariants instead, both of which catch the tool
+disagreeing with itself.
+
+The first is quantifier duality. In one theory, state a property twice:
+\begin{tmlisting}
+lemma all_phi:            "phi"
+lemma ex_notphi: exists-trace "not phi"
+\end{tmlisting}
+Semantics forces these to disagree. If every trace satisfies \code{phi} then no
+trace satisfies its negation, and conversely. So \code{verified}/\code{verified}
+and \code{falsified}/\code{falsified} are both self-contradictions, detectable
+without knowing which answer is right. This invariant is what makes the defect
+in \S\ref{sec:reuse} checkable by a reader who has never seen the protocol.
+
+The second is annotation neutrality. Options documented to affect only how the
+search runs, and attributes documented to be sound, must not change a verdict.
+Deleting a \code{[reuse]} token, or rephrasing a restriction into a logically
+equivalent form, must leave every verdict where it was. Each control in
+\S\S\ref{sec:last}--\ref{sec:reuse} is an instance of this.
+
+We built harnesses for two further invariants that did not pay off within the
+evening: agreement across the sixteen documented configuration flags, and
+symmetry of observational equivalence under swapping the two sides of every
+\code{diff} term. Both sweeps exhausted available memory on real case studies
+and were killed before completing. We ship them (\S\ref{sec:artifact}) and
+claim nothing on their behalf.
+
+\section{Defect 1: \texttt{last()} defeats the safety-formula classifier}\label{sec:last}
+
+\subsection{The mechanism}
+
+Tamarin's induction rule is sound only over a prefix-closed set of traces. The
+implementation knows this. In \code{formulaToSystem}
+(\code{lib/theory/src/Theory/Constraint/System.hs:849-856}), restrictions are
+split in two, with the reason attached as a comment:
+
+\begin{hslisting}
+(safetyRestrictions, otherRestrictions) =
+    partition isSafetyFormula restrictions
+-- Non-safety restrictions must be added to the formula, as they
+-- render the set of traces non-prefix-closed, which makes the use
+-- of induction unsound.
+gf2 = gconj $ gf1 : otherRestrictions
+\end{hslisting}
+
+Safety restrictions go into \code{sLemmas} and are asserted alongside the proof
+obligation. Non-safety restrictions are conjoined into the obligation itself,
+before induction is applied. The split is correct, and it is the fix for a
+soundness bug reported in 2012 (\S\ref{sec:provenance}).
+
+Everything therefore depends on the classifier, defined in
+\code{Guarded.hs} at lines 156 to 164:
+
+\begin{hslisting}
+isSafetyFormula gf0 = null (frees [gf0]) && noExistential gf0
+  where
+    noExistential (GAto _)            = True
+    noExistential (GGuarded Ex _ _ _) = False
+    noExistential (GGuarded All _ _ gf) = noExistential gf
+    noExistential (GDisj disj) = all noExistential $ getDisj disj
+    noExistential (GConj conj) = all noExistential $ getConj conj
+\end{hslisting}
+
+The test is: closed, and free of existential quantifiers. The docstring above it
+states the property it is standing in for, that a trace violating a safety
+formula can never be extended into one satisfying it.
+
+Closed and existential-free is not the same property. Tamarin's formula syntax
+includes the atom \code{last(\#i)}, which holds when \code{\#i} is the maximal
+timepoint of the trace. It is documented user-facing syntax
+(\code{manual/src/011\_advanced-features.md:576}) and is parsed at
+\code{Theory/Text/Parser/Formula.hs:46}. It contains no existential quantifier.
+So the restriction
+
+\begin{tmlisting}
+restriction StartIsNotLast:
+  "All x #i. Start(x) @ i ==> not(last(#i))"
+\end{tmlisting}
+
+passes \code{isSafetyFormula}, and Tamarin annotates it \code{// safety
+formula} in its own output. It is not one. The trace $[\mathsf{Start}(x)]$
+violates it, because $\mathsf{Start}$ is the final event. Its extension
+$[\mathsf{Start}(x), \mathsf{Step}(x)]$ satisfies it. A violating trace extends
+into a satisfying one, which is the negation of the property the docstring
+names.
+
+\subsection{The consequence}
+
+Figure~\ref{fig:poc01} is the whole model. Both lemmas are the same formula.
+
+\begin{figure}[t]
+\begin{tmlisting}
+theory LastInductionUnsound begin
+
+rule Start: [ Fr(x) ] --[ Start(x) ]-> [ A(x) ]
+rule Step:  [ A(x)  ] --[ Step(x)  ]-> [      ]
+
+restriction StartIsNotLast:
+  "All x #i. Start(x) @ i ==> not(last(#i))"
+
+lemma NoStart_with_induction [use_induction]:
+  "All x #i. Start(x) @ i ==> F"
+
+lemma NoStart_without_induction:
+  "All x #i. Start(x) @ i ==> F"
+
+lemma StartReachable: exists-trace
+  "Ex x #i. Start(x) @ i"
+end
+\end{tmlisting}
+\caption{The minimal witness. The two \code{NoStart} lemmas are identical
+formulas.}\label{fig:poc01}
+\end{figure}
+
+Tamarin's verdict:
+
+\begin{outlisting}
+NoStart_with_induction    (all-traces): verified (3 steps)
+NoStart_without_induction (all-traces): falsified - found trace (2 steps)
+StartReachable            (exists-trace): verified (2 steps)
+/* All wellformedness checks were successful. */
+\end{outlisting}
+
+The property is false: $[\mathsf{Start}(x), \mathsf{Step}(x)]$ satisfies the
+restriction and contains a $\mathsf{Start}$. Tamarin agrees when it does not use
+induction. The \code{exists-trace} lemma confirms the model is not vacuous.
+
+\subsection{The control}\label{sec:control1}
+
+A reader might reasonably suspect the protocol, the lemma, or induction in
+general. The control rules all three out. Take the same protocol and the same
+lemma, and phrase the restriction as a guarded existential:
+
+\begin{tmlisting}
+restriction StartImpliesStep:
+  "All x #i. Start(x) @ i ==> Ex #j. Step(x) @ j"
+\end{tmlisting}
+
+This restriction is also not prefix-closed: $[\mathsf{Start}(x)]$ violates it
+and $[\mathsf{Start}(x),\mathsf{Step}(x)]$ satisfies it, exactly as before. The
+difference is that it contains an existential, so \code{isSafetyFormula}
+returns \code{False} and Tamarin conjoins it into the obligation. The verdict:
+
+\begin{outlisting}
+NoStart_with_induction    (all-traces): falsified - found trace (6 steps)
+NoStart_without_induction (all-traces): falsified - found trace (4 steps)
+\end{outlisting}
+
+and the restriction carries no \code{// safety formula} annotation. Tamarin
+handles non-prefix-closed restrictions correctly when it recognises them. The
+defect is the recognition, and nothing else.
+
+We note in passing that the most literal rendering of $\neg\mathsf{last}(i)$,
+namely \tmc{Ex #j. #i < #j}, is rejected by Tamarin as an unguarded
+existential, which is why the control uses an action atom as the guard.
+
+\subsection{From a toy to a wrong security verdict}\label{sec:chain}
+
+Figure~\ref{fig:poc01} needs an explicit \code{[use\_induction]}, which a
+reviewer might notice. The annotation is not necessary. Two facts combine.
+
+First, \code{[sources]} implies induction with no annotation from the user
+(\code{lib/theory/src/ClosedTheory.hs:120}):
+
+\begin{hslisting}
+inductionHint
+  | any (`elem` [SourceLemma, InvariantLemma])
+        (L.get lAttributes l) = UseInduction
+  | otherwise                 = AvoidInduction
+\end{hslisting}
+
+Second, \code{[sources]} lemmas are consumed during theory closing, before any
+proof runs, and the case distinctions they refine are then used by every lemma
+in the file (\code{CloseRule.hs:426}).
+
+So a single misclassified restriction can wrongly prove a false sources lemma,
+which then prunes legitimate cases out of the whole theory.
+Figure~\ref{fig:poc02} is the result.
+
+\begin{figure}[t]
+\begin{tmlisting}
+theory LastSourcesChain begin
+
+rule Gen:  [ Fr(k) ] --[ Gen(k)  ]-> [ Out(k) ]
+rule Recv: [ In(x)  ] --[ Recv(x) ]-> [        ]
+
+restriction GenIsNotLast:
+  "All k #i. Gen(k) @ i ==> not(last(#i))"
+
+lemma bogus_sources [sources]:
+  "All k #i. Gen(k) @ i ==> F"
+
+lemma secrecy:
+  "All k #i #j. Gen(k) @ i & KU(k) @ j ==> F"
+
+lemma gen_reachable: exists-trace
+  "Ex k #i. Gen(k) @ i"
+end
+\end{tmlisting}
+\caption{The key is published by \tmc{Out(k)}. Tamarin reports its secrecy as
+verified.}\label{fig:poc02}
+\end{figure}
+
+\begin{outlisting}
+bogus_sources (all-traces):   verified (3 steps)
+secrecy       (all-traces):   verified (2 steps)
+gen_reachable (exists-trace): verified (2 steps)
+/* All wellformedness checks were successful. */
+\end{outlisting}
+
+Rule \code{Gen} sends the fresh key on the public channel. The adversary learns
+it immediately. Tamarin closes \code{secrecy} with \code{by solve( !KU( ~n ) @
+\#j )}: the false refinement removed the only case that mattered.
+
+Every signal the manual teaches a user to check is green. The wellformedness
+report is clean. No proof contains a \code{sorry}. No lemma is reported
+falsified. The \code{exists-trace} lemma confirms the model is live, so the
+usual vacuity defence does not apply. Deleting only the sources lemma restores
+\code{secrecy: falsified}, which confirms the mechanism.
+
+\subsection{Provenance: the fix and the hole shipped together}\label{sec:provenance}
+
+In August 2012 Simon Meier committed a model file titled
+\code{Axioms\_and\_Induction.spthy} with the message ``example illustrating
+soundness bug \#108; i.e., that our current handling of axioms and trace
+induction is not sound'' (\code{a32cc3f8}). The model is still in the tree at
+\code{examples/loops/Axioms\_and\_Induction.spthy}, and its comment reads
+``Note that the set of traces satisfying this trace is *not* prefix-closed.''
+Six days later, commit \code{9726e4c4}, ``fixed two soundness bugs'',
+introduced \code{isSafetyFormula} and the partition that uses it.
+
+We compared the function body at that commit against the current one:
+
+\begin{outlisting}
+git show 9726e4c4:src/Theory/Constraint/System/Guarded.hs
+git show HEAD:lib/theory/src/Theory/Constraint/System/Guarded.hs
+\end{outlisting}
+
+The two are byte-identical. The predicate has never been modified in fourteen
+years.
+
+The question this raises is whether \code{last} was reachable from surface
+syntax in 2012, or whether the hole opened later when the atom was exposed. It
+was reachable. The same commit that introduced the fix contains, at
+\code{src/Theory/Text/Parser.hs:340}:
+
+\begin{hslisting}
+[ Last <$> try (symbol "last" *> parens nodevarTerm) <?> "last atom"
+\end{hslisting}
+
+The fix for bug \#108 and the syntax that defeats it were in the same commit,
+on the same day. The 2012 counterexample used an existential, which the new
+predicate caught. The \code{last} phrasing of the same idea was already
+expressible and was not caught, and has not been caught since.
+
+\subsection{Scope, stated against our own interest}\label{sec:scope}
+
+The defect is real and it is reachable from documented syntax. It does not
+invalidate any published Tamarin result, and we think a paper that implied
+otherwise would deserve to be dismissed.
+
+We scanned every model shipped with Tamarin: 1042 files under
+\code{examples/}. Thirty-six contain the string \code{last(}. In every one, the
+occurrence is inside Tamarin's own machine-generated proof text, saved into an
+analyzed output, of the form
+
+\begin{outlisting}
+solve( (last(#i)) | (Ex #j. Update(k,r) @ #j & !(last(#j)) & #j < #i) )
+\end{outlisting}
+
+None is a user-written restriction. Zero models use \code{last()} in the
+position that triggers the bug. The scanner is
+\code{attacks/tools/lastscan.py}.
+
+So the accurate claim is that this is a live unsoundness in documented syntax
+that currently affects no published result. It is a trap that has been armed
+for fourteen years and that nobody has stepped on, which is a different and
+less comfortable statement than either ``Tamarin's results are wrong'' or
+``this does not matter''.
+
+\subsection{The fix}
+
+One line, in \code{Guarded.hs}:
+
+\begin{hslisting}
+noExistential (GAto (Last _)) = False
+\end{hslisting}
+
+\code{toInductionHypothesis} already refuses formulas containing \code{last}
+(\code{Guarded.hs:619}, error string ``formula not last-free''), so
+reclassifying makes induction inapplicable to theories carrying such a
+restriction, which is the correct behaviour.
+
+\section{Defect 2: the vacuity checks have not run since PR \#725}\label{sec:vacuity}
+
+The most common modelling error in Tamarin is a lemma that quantifies over an
+action fact no rule emits. Such a lemma is vacuously true and Tamarin reports
+it \code{verified}. Practitioners are taught to guard against this by hand, but
+Tamarin also ships two checks for it, \code{inexistentActions} and
+\code{inexistentActionsRestrictions}
+(\code{Theory/Tools/Wellformedness.hs:706-734}), fully implemented and with
+error messages written.
+
+They do not run. Here is the call site
+(\code{Wellformedness.hs:578-583}):
+
+\begin{hslisting}
+-- | Report on facts usage. Skip checks on non-existant actions
+-- if `incompleteMSRs` is True.
+factReports incompleteMSRs thy =
+    concat [ reservedReport, ..., factUsage, factLhsOccurNoRhs ]
+    ++ concat [ inexistentActions ++ inexistentActionsRestrictions
+              | incompleteMSRs ]
+\end{hslisting}
+
+The list comprehension \emph{includes} the checks when \code{incompleteMSRs} is
+\code{True}, which is the inverse of what its own docstring says. And the sole
+production call site fixes the flag (\code{src/Main/TheoryLoader.hs:602}):
+
+\begin{hslisting}
+incompleteMSRs = False
+  -- TODO how do we know if we do not have all MSRs due to translation?
+\end{hslisting}
+
+Either reading condemns the code. Under the docstring's intent the guard is
+backwards; under the guard's literal meaning the flag is set wrongly. In both
+cases the checks are unreachable in the shipped tool.
+
+\subsection{Witness}
+
+\begin{figure}[t]
+\begin{tmlisting}
+theory VacuousLemmaTypo begin
+
+rule Setup: [ Fr(k)  ] --[ SecretKey(k) ]-> [ Key(k) ]
+rule Leak:  [ Key(k) ] --[ Leaked(k)    ]-> [ Out(k) ]
+
+// The rules emit SecretKey. This lemma says SecrettKey.
+lemma secrecy_typo:
+  "All k #i. SecrettKey(k) @ i ==> not(Ex #j. K(k) @ j)"
+
+lemma secrecy_intended:
+  "All k #i. SecretKey(k) @ i ==> not(Ex #j. K(k) @ j)"
+end
+\end{tmlisting}
+\caption{A one-character typo. Tamarin reports the vacuous lemma as verified
+and the wellformedness report as clean.}\label{fig:poc03}
+\end{figure}
+
+\begin{outlisting}
+secrecy_typo     (all-traces): verified (2 steps)
+secrecy_intended (all-traces): falsified - found trace (3 steps)
+/* All wellformedness checks were successful. */
+\end{outlisting}
+
+Running with \code{--quit-on-warning} changes nothing, because no warning is
+produced: the check that would produce it never executes.
+
+\subsection{Provenance}
+
+\code{git log -L 583,583} on the file attributes the guard to commit
+\code{98c3887f}, ``Extend ProVerif export module (\#725)''. We diffed the
+commit directly. Before it:
+
+\begin{hslisting}
+factReports :: OpenTranslatedTheory -> WfErrorReport
+factReports thy = concat
+    [ reservedReport, reservedFactNameRules, freshFactArguments
+    , specialFactsUsage, factUsage, factLhsOccurNoRhs
+    , inexistentActions, inexistentActionsRestrictions ]
+\end{hslisting}
+
+After it, the last two members moved behind the guard shown above. A refactor
+of an unrelated export backend silently disabled the tool's only automatic
+guard against its most common modelling error, and no test caught the
+regression.
+
+\section{Defect 3: unproven assumptions are admitted as facts}\label{sec:reuse}
+
+\subsection{The mechanism}
+
+\code{gatherReusableLemmas} (\code{lib/theory/src/CloseRule.hs:181-188}) decides
+which lemmas are admitted as assumptions:
+
+\begin{hslisting}
+gatherReusableLemmas kind = do
+    LemmaItem lem <- previousItems
+    guard $    lemmaSourceKind lem <= kind
+            && ReuseLemma `elem` L.get lAttributes lem
+            && AllTraces == L.get lTraceQuantifier lem
+            && L.get lName lem `notElem` L.get pcHiddenLemmas ctxt
+            && "ALL" `notElem` L.get pcHiddenLemmas ctxt
+    return $ formulaToGuarded_ $ L.get lFormula lem
+\end{hslisting}
+
+The filter checks the attribute, the trace quantifier, the source kind and the
+hide-list. It does not check whether the lemma was proved. We looked for a
+proof-status gate elsewhere on the path and there is none: the
+\code{CompleteProof} constructor is consumed only in \code{src/Web/Theory.hs},
+where it colours a cell in the interactive interface.
+
+The comment beside the insertion states the justification:
+
+\begin{hslisting}
+-- Note that it is OK to add reusable lemmas directly to the system,
+-- as they do not change the considered set of traces. This is the key
+-- difference between lemmas and restrictions.
+\end{hslisting}
+
+That is sound under the precondition that the lemma holds. Nothing enforces the
+precondition.
+
+\subsection{Tamarin contradicting itself}
+
+The admitted formulas go into \code{sLemmas}, which constrains the constraint
+system for both trace quantifiers. A false assumption therefore does two things
+at once: it closes all-traces branches that should stay open, and it prunes the
+witness search for exists-trace lemmas. Figure~\ref{fig:poc08} exploits both.
+
+\begin{figure}[t]
+\begin{tmlisting}
+theory ReusePoisonsBothDirections begin
+
+rule Gen: [ Fr(k) ] --[ Secret(k) ]-> [ Out(k) ]
+
+lemma helper [reuse]:
+  "All k #i #j. Secret(k) @ i & KU(k) @ j ==> F"
+
+lemma target:
+  "All k #i. Secret(k) @ i ==> not(Ex #j. KU(k) @ j)"
+
+lemma live: exists-trace
+  "Ex k #i #j. Secret(k) @ i & KU(k) @ j"
+end
+\end{tmlisting}
+\caption{\code{helper} and \code{live} are exact negations of one
+another.}\label{fig:poc08}
+\end{figure}
+
+\begin{outlisting}
+helper (all-traces):   falsified - found trace (3 steps)
+target (all-traces):   verified (2 steps)
+live   (exists-trace): falsified - no trace found (2 steps)
+\end{outlisting}
+
+Read the first and third lines together. \code{helper} is
+\tmc{All k #i #j. Secret(k)@i & KU(k)@j ==> F} and \code{live} is
+\tmc{Ex k #i #j. Secret(k)@i & KU(k)@j}. The second is the negation of the
+first. ``Falsified'' on \code{helper} asserts that such a trace exists.
+``Falsified'' on \code{live} asserts that no such trace exists. Tamarin affirms
+and denies the same proposition in one summary block.
+
+This is the defect we consider most serious, and not because its consequences
+are the worst. It is the one that requires nothing of the reader. No knowledge
+of the protocol, no judgement about what the right answer is, and no trust in
+us. Two lines of the tool's own output are inconsistent with each other.
+
+Why is the inconsistency visible at all, given that both poisoned verdicts
+might have been consistent with one another? Because \code{previousItems}
+draws only from lemmas that precede the current one, so \code{helper} never
+reuses itself and receives the correct verdict, while every later lemma is
+evaluated under the refuted assumption. The pair \code{target}/\code{live}, by
+contrast, comes back \code{verified}/\code{falsified}, which is mutually
+consistent and therefore invisible to the duality oracle of
+\S\ref{sec:oracles}. Detecting this class requires pairing against the reuse
+lemma itself.
+
+\subsection{The control}
+
+Deleting the single token \code{[reuse]} from Figure~\ref{fig:poc08}, changing
+nothing else, gives
+
+\begin{outlisting}
+helper (all-traces):   falsified - found trace (3 steps)
+target (all-traces):   falsified - found trace (3 steps)
+live   (exists-trace): verified (3 steps)
+\end{outlisting}
+
+all three correct. This fixes the ground truth, so the contradiction above
+resolves as follows: \code{live} is true, \code{target} is false, and Tamarin's
+verdicts for both are wrong.
+
+\subsection{The same defect on a hotter path}
+
+\code{[sources]} lemmas are admitted the same way and consumed earlier, during
+theory closing, with no failure path if their proof later fails. The blast
+radius is the whole theory rather than one lemma:
+
+\begin{outlisting}
+bogus_sources (all-traces): falsified - found trace (2 steps)
+target        (all-traces): verified (2 steps)
+\end{outlisting}
+
+The auto-generated sources lemmas produced by \code{--auto-sources} take the
+same unguarded path. We checked whether this is realised in practice: all
+sixteen auto-sources case studies in \code{case-studies-regression/} prove
+their generated \code{AUTO\_typing} lemma, so the risk there is structural
+rather than current.
+
+\subsection{On invalidation}
+
+Tamarin has a proof status for exactly this hazard.
+\code{Theory/Proof.hs:406} defines \code{InvalidatedProof}, documented as ``The
+proof has been Invalidated (eg. by editing a reuse lemma)''. The constructor is
+set in exactly one place in the codebase: \code{src/Web/Handler.hs:255}, the
+interactive web interface.
+
+We want to state the consequence carefully, because the obvious framing is
+wrong. The manual documents this invalidation in its interactive-mode section
+(\code{manual/src/007\_property-specification.md:229-234}), so batch mode never
+promised it. The correct statement is not that a safety net fails to fire. It
+is that the safety net exists only in the graphical interface, while batch
+mode, which is what continuous integration and every published artifact use,
+has no equivalent and no proof-status gate anywhere on the reuse path.
+
+\section{What we could not break}\label{sec:held}
+
+This section is longer than any of the preceding three, which is the point.
+
+We report it for two reasons. Negative results locate a defect: knowing that
+the solver held while the classifier failed is what turns five bug reports into
+a claim about where assurance effort is misallocated. And a paper that reported
+only hits would deserve the suspicion that it went looking for a conclusion.
+
+\paragraph{The constraint solver and term algebra.} The duality oracle of
+\S\ref{sec:oracles} was run over fifteen models covering exclusive-or
+(self-cancellation, one-time pad, chained pads, the \code{zero} constant),
+multisets, Diffie-Hellman, subterms, natural numbers, hashing, and symmetric
+encryption. No contradictions. Controls in the same battery return opposite
+verdicts as they should, so the oracle discriminates.
+
+\paragraph{Injective facts and stateful reasoning.} \code{simpInjectiveFactEqMon}
+(\code{Simplify.hs:534-660}) is the newest and most aggressive inference in the
+solver: it derives equalities and ordering constraints from inferred monotonic
+behaviour of fact arguments, which is the dangerous direction, since it adds
+constraints rather than removing them. It held on constant positions, strictly
+increasing positions, natural-number counters, non-fresh identifiers, and
+SAPIC locked and unlocked state cells.
+
+\paragraph{Stored-proof replay.} Tamarin serialises proofs into the model file,
+and we expected replay to be a soft target. It is not. Three separate forgeries
+against \code{case-studies-regression/Tutorial\_analyzed.spthy}, namely
+weakening a lemma statement while keeping its proof, replacing a proof with a
+bogus one-step \code{by contradiction}, and relabelling a case, were all caught
+and downgraded to \code{analysis incomplete}. Published proof artifacts do get
+re-validated on load.
+
+\paragraph{Goal-ranking oracles.} \code{oracleRanking}
+(\code{ProofMethod.hs:604-621}) returns \code{ranked ++ remaining}. Goals the
+external oracle omits are appended rather than dropped, so a hostile or buggy
+oracle costs time and not soundness. The only termination path,
+\code{quitOnEmpty}, emits a \code{Sorry} and is reported as an incomplete proof.
+
+\paragraph{Predicate expansion.} \code{expandFormula}
+(\code{Theory/Syntactic/Predicate.hs:94-105}) shifts de Bruijn indices
+correctly. A predicate body binding \code{y}, used at a call site that also
+binds \code{y}, gives results identical to a non-colliding control. Macro
+expansion, by contrast, is not hygienic: a macro body variable is captured by a
+same-named rule variable, silently, with a clean wellformedness report. We do
+not report that as a defect, because the genuinely dangerous case, a macro
+injecting an unbound variable, is caught by \code{unboundReport}, and because
+we could not turn the capture into a wrong verdict.
+
+\paragraph{Goal management.} The \code{openGoals} filter drops \code{KU} goals
+it treats as always constructible (\code{Goals.hs:70-84}). We checked whether
+the dropped goals are genuinely handled elsewhere; they are, decomposed into
+sub-goals by \code{insertAction} (\code{Reduction.hs:293-350}).
+
+\paragraph{Equational front end.} Non-terminating equations are rejected at
+parse time. Equations that are not subterm-convergent produce an explicit
+warning naming the offending equation. Precomputation limits (\code{-s},
+\code{-c}) leave sources under-refined when hit, which costs completeness and
+not soundness.
+
+\paragraph{An open lead.} In observational-equivalence mode, \code{DiffAttack}
+(\code{ProofMethod.hs:373-387}) can report an attack on a constraint system it
+never closed:
+
+\begin{hslisting}
+guard (solved || (trivial sys' && notContradictory))
+\end{hslisting}
+
+The load-bearing assumption is that a goal over pairwise-distinct message
+variables is always satisfiable. It is asserted in a comment, and it has failed
+before: commit \code{37c7285a} is titled ``fixed bug when mirroring XOR leading
+to false attacks'', and \code{07021243} narrowed the same check with the
+message ``otherwise unsound''. We could not construct a witness. Our two
+attempts, a reflexivity check on \code{diff(t,t)} and a symmetry sweep over
+real case studies, produced one completed passing case and one sweep that
+exhausted memory before finishing. This lead is open, not cleared. It is also
+the most promising direction for the one result this paper lacks, a false
+attack rather than a missed one.
+
+\subsection{The shape of the result set}
+
+Every confirmed defect makes Tamarin too permissive. Not one makes it too
+strict. For a tool whose output is used to certify deployed protocols this is
+the worse direction, and it is consistent with the pattern: each defect is a
+place where a check was skipped, never a place where an inference was drawn
+incorrectly. The inferences are, as far as we could determine in an evening,
+correct.
+
+\section{Disclosure}\label{sec:disclosure}
+
+We attempted coordinated disclosure and could not find a channel to use.
+
+At the time of writing, the Tamarin repository has no security policy. There is
+no \code{SECURITY.md} at the repository root or under \code{.github/}, so
+GitHub's advisory interface at
+\code{github.com/tamarin-prover/tamarin-prover/security} offers no reporting
+path. \code{CONTRIBUTING.md} documents pull requests and issue etiquette and
+does not mention vulnerabilities, security reports, or private disclosure. The
+\code{.github/} directory contains two workflow files and nothing else.
+
+For most projects the absence of a policy is unremarkable. For a tool whose
+output is cited in support of the security of deployed protocols, a defect that
+turns \code{falsified} into \code{verified} is closer to a vulnerability than
+to an ordinary bug, and the absence of a route to report one privately is worth
+naming.
+
+We are therefore publishing directly, with complete reproductions, and we would
+encourage the maintainers to adopt a policy. Our first recommendation in
+\S\ref{sec:lessons} is that one be added, because it costs a file and it is the
+precondition for everything else in that list.
+
+\section{What we think this means}\label{sec:lessons}
+
+\subsection{Sophistication and assurance are not the same axis}
+
+Tamarin's constraint-solving procedure is a serious piece of work with a
+published metatheory, and our evening produced no evidence against it. The
+defects are all in code that any competent programmer could have audited: a
+five-line predicate, an inverted list comprehension, a filter missing a
+conjunct. This is not a coincidence, and we do not think it is specific to
+Tamarin.
+
+Attention follows interest. The constraint solver is where the research is, so
+it gets the papers, the proofs, and the scrutiny. The restriction classifier is
+plumbing. But the classifier is what decides whether the solver's soundness
+theorem applies to your model, and a soundness theorem about a set of traces
+you are not analyzing is not a soundness theorem about your protocol. The
+guardrails carry the theorem across to the user, and they had not been audited
+to anything like the depth of the thing they carry.
+
+\subsection{A regression test would have caught two of three}
+
+The 2012 counterexample for bug \#108 is still in the tree. Nobody added its
+\code{last}-phrased sibling. The vacuity checks were unconditional before PR
+\#725 and gated afterwards, and no test noticed, because the test suite
+compares end-to-end verdicts on case studies and no case study depends on those
+checks firing.
+
+Both are cheap to prevent. A property test asserting that
+\code{isSafetyFormula} implies prefix-closure on generated formulas would have
+caught the first at any point in fourteen years. A single model with a
+deliberately misspelled action fact, asserting that the wellformedness report
+is non-empty, would have caught the second at the moment of the refactor.
+
+\subsection{On the cost of an audit}
+
+The claim in our title is meant literally, and we want to be careful with it in
+both directions.
+
+An evening was enough. It was enough because reading unfamiliar Haskell with an
+assistant that can follow a call graph across twenty files is much faster than
+reading it alone, and because the hypotheses that mattered were cheap to test:
+a ten-line model file and a sub-second run. The assistant was wrong repeatedly,
+and every finding here survived because it was reduced to a reproduction rather
+than to an argument. That is the part of the method we would defend most
+strongly, and it is not new; it is just newly cheap.
+
+An evening was also not enough for plenty. We did not complete the
+configuration-agreement sweep. We did not complete the observational-equivalence
+symmetry sweep. We did not seriously examine the SAPIC translation, the export
+backends, or the accountability machinery. We have one open lead and no false
+attack. A determined effort over a week, or the same method applied by people
+who know the codebase, would find more.
+
+The lesson we would draw is not about Tamarin, and it is certainly not that
+tools like it should be trusted less in favour of nothing. It is that the
+expected cost of auditing them has dropped by something like an order of
+magnitude, and the field has not yet adjusted its habits to that fact. Every
+verifier in common use, ours included, deserves an evening of this. We expect
+most of them will yield something, and we expect that to be good for all of us.
+
+\subsection{Recommendations}
+
+\begin{enumerate}
+  \item Add a \code{SECURITY.md} with a private reporting address.
+  \item Fix \code{isSafetyFormula} by rejecting \code{Last} atoms, one line, and
+    add the \code{last}-phrased sibling of the 2012 counterexample to the
+    regression suite.
+  \item Repair the \code{incompleteMSRs} guard so the vacuity checks execute,
+    and add a model whose wellformedness report is asserted non-empty.
+  \item Refuse to admit a \code{[reuse]} or \code{[sources]} lemma whose proof
+    is not closed, or propagate a taint marker into dependent lemmas so the
+    summary reads \code{verified (assuming: helper)} rather than
+    \code{verified}.
+  \item Add property tests for the predicates the soundness argument depends
+    on, separately from the end-to-end case-study suite, since the latter
+    cannot see a check that stopped running.
+\end{enumerate}
+
+\section{Artifact}\label{sec:artifact}
+
+The artifact is seven Tamarin model files, a runner, and two analysis scripts.
+Five models reproduce defects and two are controls. \code{run.sh} executes all
+seven, checks each verdict against the expected pattern, and exits non-zero if
+any defect stops reproducing, so it doubles as a regression test against a
+patched build. Every model completes in under a second.
+
+\code{tools/lastscan.py} produces the corpus scan of \S\ref{sec:scope}.
+\code{tools/consistency\_oracle.py} implements the duality oracle of
+\S\ref{sec:oracles} and contains the fifteen-case battery of \S\ref{sec:held}.
+We also ship the two harnesses whose sweeps did not complete
+(\code{differ.py}, \code{diffsym.py}); they are included because the invariants
+they encode are the right ones, and we claim no result on their behalf.
+
+All findings were verified against \code{tamarin-prover 1.12.0} with Maude
+3.5.1, and every implicated code path was compared across \code{1.12.0..HEAD}
+and is unchanged, so the defects are present on \code{develop} at
+\code{ef3f0468}.
+
+\section{Related work}\label{sec:related}
+
+Soundness defects in verification tools have been reported before, and the
+genre is well established: implementations of decision procedures have been
+found to disagree with their own metatheory in SMT
+solvers~\cite{SMTFuzz,SMTDelta} and in C compilers~\cite{Csmith}, generally by
+differential or metamorphic testing rather than by proof. Our duality oracle
+(\S\ref{sec:oracles}) is a metamorphic relation in that tradition, specialised
+to a tool that answers questions about trace sets.
+
+Within protocol verification, comparisons between tools have surfaced
+discrepancies that turned out to be tool defects rather than modelling
+differences, and Tamarin's own history records several: the two soundness bugs
+fixed in \code{9726e4c4}, the mirroring bug in \code{37c7285a}, and the
+narrowing in \code{07021243}, each found by the developers themselves. What we
+add is not a new class of defect but a data point about cost: the same kind of
+finding, obtained without domain expertise in the tool, in one evening.
+
+\section{Conclusion}
+
+We found five defects in Tamarin in one evening. Three are serious: an
+unsound induction rule reachable from documented syntax and open since 2012, a
+pair of wellformedness checks that have not executed since an unrelated
+refactor, and a lemma-dependency mechanism that admits refuted assumptions and
+can be made to affirm and deny the same proposition in a single run.
+
+We also spent that evening failing to break the constraint solver, the term
+algebra, the monotonicity inference, the goal manager, and proof replay. That
+failure is the more interesting half of the result. The hard parts of Tamarin
+are in good shape. The checks that decide whether those hard parts apply to
+your model are not, and nobody had looked, because looking used to be
+expensive and now it is not.
+
+None of this makes Tamarin a bad tool. We would still reach for it. It does
+suggest that the confidence the field places in tools of this class has been
+calibrated against their theory rather than against their implementations, and
+that the gap between the two is now cheap enough to measure that there is no
+longer an excuse for leaving it unmeasured. That applies to every tool in this
+space, including our own. It seemed worth an evening to find out. We would
+recommend the exercise.
+
+
+\begin{thebibliography}{99}
+
+\bibitem{TamarinCAV}
+S.~Meier, B.~Schmidt, C.~Cremers, and D.~Basin.
+\newblock The TAMARIN Prover for the Symbolic Analysis of Security Protocols.
+\newblock In \emph{Computer Aided Verification (CAV)}, LNCS 8044, pp. 696--701,
+  2013.
+\newblock \url{https://doi.org/10.1007/978-3-642-39799-8_48}.
+
+\bibitem{TamarinCSF}
+B.~Schmidt, S.~Meier, C.~Cremers, and D.~Basin.
+\newblock Automated Analysis of Diffie-Hellman Protocols and Advanced Security
+  Properties.
+\newblock In \emph{IEEE Computer Security Foundations Symposium (CSF)},
+  pp. 78--94, 2012.
+\newblock \url{https://doi.org/10.1109/CSF.2012.25}.
+
+\bibitem{TamarinManual}
+The Tamarin Team.
+\newblock \emph{Tamarin-Prover Manual: Security Protocol Analysis in the
+  Symbolic Model}.
+\newblock \url{https://tamarin-prover.com/manual/}. Accessed August 2026.
+
+\bibitem{DolevYao}
+D.~Dolev and A.~C.~Yao.
+\newblock On the Security of Public Key Protocols.
+\newblock \emph{IEEE Transactions on Information Theory}, 29(2):198--208, 1983.
+\newblock \url{https://doi.org/10.1109/TIT.1983.1056650}.
+
+\bibitem{ProVerif}
+B.~Blanchet.
+\newblock An Efficient Cryptographic Protocol Verifier Based on Prolog Rules.
+\newblock In \emph{IEEE Computer Security Foundations Workshop (CSFW)},
+  pp. 82--96, 2001.
+\newblock \url{https://doi.org/10.1109/CSFW.2001.930138}.
+
+\bibitem{TLS13}
+C.~Cremers, M.~Horvat, J.~Hoyland, S.~Scott, and T.~van~der~Merwe.
+\newblock A Comprehensive Symbolic Analysis of TLS 1.3.
+\newblock In \emph{ACM Conference on Computer and Communications Security
+  (CCS)}, pp. 1773--1788, 2017.
+\newblock \url{https://doi.org/10.1145/3133956.3134063}.
+
+\bibitem{FiveG}
+D.~Basin, J.~Dreier, L.~Hirschi, S.~Radomirovic, R.~Sasse, and V.~Stettler.
+\newblock A Formal Analysis of 5G Authentication.
+\newblock In \emph{ACM Conference on Computer and Communications Security
+  (CCS)}, pp. 1383--1396, 2018.
+\newblock \url{https://doi.org/10.1145/3243734.3243846}.
+
+\bibitem{EMV}
+D.~Basin, R.~Sasse, and J.~Toro-Pozo.
+\newblock The EMV Standard: Break, Fix, Verify.
+\newblock In \emph{IEEE Symposium on Security and Privacy (S\&P)},
+  pp. 1766--1781, 2021.
+\newblock \url{https://doi.org/10.1109/SP40001.2021.00037}.
+
+\bibitem{Csmith}
+X.~Yang, Y.~Chen, E.~Eide, and J.~Regehr.
+\newblock Finding and Understanding Bugs in C Compilers.
+\newblock In \emph{ACM SIGPLAN Conference on Programming Language Design and
+  Implementation (PLDI)}, pp. 283--294, 2011.
+\newblock \url{https://doi.org/10.1145/1993498.1993532}.
+
+\bibitem{SMTFuzz}
+D.~Winterer, C.~Zhang, and Z.~Su.
+\newblock On the Unusual Effectiveness of Type-Aware Operator Mutations for
+  Testing SMT Solvers.
+\newblock \emph{Proceedings of the ACM on Programming Languages}, 4(OOPSLA),
+  Article 193, pp. 193:1--193:25, 2020.
+\newblock \url{https://doi.org/10.1145/3428261}.
+
+\bibitem{SMTDelta}
+R.~Brummayer and A.~Biere.
+\newblock Fuzzing and Delta-Debugging SMT Solvers.
+\newblock In \emph{7th International Workshop on Satisfiability Modulo Theories
+  (SMT)}, pp. 1--5, 2009.
+\newblock \url{https://doi.org/10.1145/1670412.1670413}.
+
+\end{thebibliography}
+
+\end{document}

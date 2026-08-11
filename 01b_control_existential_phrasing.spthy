@@ -1,0 +1,84 @@
+/*
+==============================================================================
+  PoC 01b -- CONTROL for PoC 01.  Not a defect: this file behaves CORRECTLY.
+==============================================================================
+
+  This is the same protocol and the same lemma as
+  attacks/01_last_induction_unsound.spthy, with the restriction expressed
+  using a guarded existential instead of `last()`.
+
+  Both restrictions are non-prefix-closed:
+
+      01  : "All x #i. Start(x) @ i ==> not(last(#i))"
+            [Start(x)] violates it, [Start(x),Step(x)] satisfies it.
+
+      01b : "All x #i. Start(x) @ i ==> Ex #j. Step(x) @ j"
+            [Start(x)] violates it, [Start(x),Step(x)] satisfies it.
+
+  The only difference is which side of
+
+      partition isSafetyFormula restrictions
+      -- lib/theory/src/Theory/Constraint/System.hs:849
+
+  they land on.  The existential phrasing is correctly classified as
+  non-safety and conjoined into the proof obligation; the `last` phrasing is
+  misclassified as safety and routed into sLemmas instead.
+
+  ---------------------------------------------------------------------------
+  TAMARIN SAYS (this file -- all correct)
+  ---------------------------------------------------------------------------
+    NoStart_with_induction    (all-traces): falsified - found trace (6 steps)
+    NoStart_without_induction (all-traces): falsified - found trace (4 steps)
+    StartReachable            (exists-trace): verified (4 steps)
+
+  and the restriction is NOT annotated "// safety formula".
+
+  ---------------------------------------------------------------------------
+  TAMARIN SAYS (PoC 01, identical protocol and lemma)
+  ---------------------------------------------------------------------------
+    // safety formula                                          <-- misclassified
+    NoStart_with_induction    (all-traces): verified (3 steps)  <-- WRONG
+    NoStart_without_induction (all-traces): falsified - found trace (2 steps)
+    StartReachable            (exists-trace): verified (2 steps)
+
+  ---------------------------------------------------------------------------
+  WHY THIS MATTERS
+  ---------------------------------------------------------------------------
+  This pair rules out every alternative explanation for PoC 01's wrong
+  verdict: it is not the protocol, not the lemma, not induction in general,
+  and not non-prefix-closed restrictions in general -- Tamarin handles those
+  correctly, as this file shows.  It is specifically the classification of
+  `last` atoms by isSafetyFormula.
+
+  Note: the most literally equivalent phrasing of `not(last(#i))` would be
+  "Ex #j. #i < #j", but Tamarin rejects that as an unguarded existential
+  ("unguarded variable(s) '#j'"), so the control uses a Step action as the
+  guard.  This changes the restriction's exact content but not the property
+  that matters here: non-prefix-closedness.
+
+  This file is a control and is NOT exercised by run.sh (which only checks
+  that defects still reproduce).  Run it directly:
+
+      tamarin-prover --prove 01b_control_existential_phrasing.spthy
+==============================================================================
+*/
+
+theory ControlGuardedExistential begin
+
+rule Start: [ Fr(x) ] --[ Start(x) ]-> [ A(x) ]
+rule Step:  [ A(x)  ] --[ Step(x)  ]-> [      ]
+
+// Non-prefix-closed, but with a guarded existential => classified non-safety.
+restriction StartImpliesStep:
+  "All x #i. Start(x) @ i ==> Ex #j. Step(x) @ j"
+
+lemma NoStart_with_induction [use_induction]:
+  "All x #i. Start(x) @ i ==> F"
+
+lemma NoStart_without_induction:
+  "All x #i. Start(x) @ i ==> F"
+
+lemma StartReachable: exists-trace
+  "Ex x #i. Start(x) @ i"
+
+end
