@@ -5,7 +5,10 @@
 
   CLASS      : missed attack (false "verified")
   SEVERITY   : critical -- unsound proof rule
-  AFFECTS    : tamarin-prover 1.12.0 and develop HEAD (1.13.0)
+  AFFECTS    : tamarin-prover 1.12.0 and develop @ ef3f0468 (1.13.0)
+  STATUS     : confirmed by the maintainers; fix proposed in PR #915 (open).
+               The maintainers dispute the "soundness" label.  See the
+               DISPUTE section below and README.md.
 
   ---------------------------------------------------------------------------
   ROOT CAUSE
@@ -28,13 +31,11 @@
           ...
 
   "Closed and existential-free" is not the same as "prefix-closed".  The atom
-  `last(#i)` is part of the surface syntax
-  (lib/theory/src/Theory/Text/Parser/Formula.hs:46) and contains no
-  existential quantifier, so a restriction built from `not(last(#i))` is
-  misclassified as a safety restriction.  It is then routed into `sLemmas`
-  instead of being conjoined into the proof obligation before `ginduct` runs,
-  and the induction hypothesis is asserted over trace prefixes that are not
-  themselves valid traces of the restricted system.
+  `last(#i)` contains no existential quantifier, so a restriction built from
+  `not(last(#i))` is misclassified as a safety restriction.  It is then routed
+  into `sLemmas` instead of being conjoined into the proof obligation before
+  `ginduct` runs, and the induction hypothesis is asserted over trace prefixes
+  that are not themselves valid traces of the restricted system.
 
   ---------------------------------------------------------------------------
   WHY THE RESTRICTION BELOW IS NOT A SAFETY FORMULA
@@ -56,7 +57,7 @@
   [Start(x), Step(x)] satisfies the restriction and contains a Start event.
 
   ---------------------------------------------------------------------------
-  TAMARIN SAYS
+  TAMARIN SAYS (1.12.0, unpatched)
   ---------------------------------------------------------------------------
     NoStart_with_induction    (all-traces): verified (3 steps)     <-- WRONG
     NoStart_without_induction (all-traces): falsified - found trace (2 steps)
@@ -66,8 +67,8 @@
   ---------------------------------------------------------------------------
   CONTROL EXPERIMENT (isolates the mechanism)
   ---------------------------------------------------------------------------
-  attacks/01b_control_existential_phrasing.spthy is the SAME protocol and the
-  SAME lemma, with the restriction expressed as a guarded existential:
+  01b_control_existential_phrasing.spthy is the SAME protocol and the SAME
+  lemma, with the restriction expressed as a guarded existential:
 
       restriction StartImpliesStep:
         "All x #i. Start(x) @ i ==> Ex #j. Step(x) @ j"
@@ -80,12 +81,44 @@
       existential phrasing  : NoStart_with_induction -> falsified  (correct)
 
   Same protocol, same lemma, both restrictions non-prefix-closed.  The only
-  difference is which side of `partition isSafetyFormula` they land on.  This
-  rules out any alternative explanation for the wrong verdict.
+  difference is which side of `partition isSafetyFormula` they land on.
 
-  (An exactly equivalent phrasing "Ex #j. #i < #j" is rejected by Tamarin as
-  an unguarded existential, which is why the control uses a Step action as the
-  guard.)
+  ---------------------------------------------------------------------------
+  DISPUTE: is this a soundness bug?
+  ---------------------------------------------------------------------------
+  The maintainers confirm the bug and dispute the label.  Their position is
+  that `last` is intended for internal use only, that not enough places
+  checked for it, and that "it's debatable whether this is a soundness bug as
+  no proof rule was changed".
+
+  This file takes the position that it is a soundness bug:
+
+    1. PR #915 makes three changes: a warning, a filter that drops such
+       restrictions, and a one-line change to `isSafetyFormula`.  Keep only
+       the warning and revert the rest, and this file still prints `verified`
+       for a false lemma.  The change that corrects the verdict is the change
+       to the classifier.
+
+    2. `isSafetyFormula` exists to discharge a side condition that induction
+       needs in order to be sound, and it returned the wrong answer for the
+       restriction below.
+
+    3. "Internal use only" was not a rule a user could have followed.  The
+       manual's machine-tested grammar (manual/grammar/grammar.ebnf) derives
+       `last()` from the body of a restriction:
+
+           restriction ::= ... ':' '"' (_formula: formula) '"'
+           _formula    ::= ... | _temporal_variable_operation | ...
+           _temporal_variable_operation ::= temp_var_induction | temp_var_order
+                                          | temp_var_eq
+           temp_var_induction ::= ATOM('last' '(' temporal_var ')')
+
+       `last` sits in the same production as `#i < #j` and `#i = #j`, which
+       restrictions use constantly.
+
+    4. The hole is as old as the fix.  See PROVENANCE.
+
+  Full argument: README.md, section "On the soundness classification".
 
   ---------------------------------------------------------------------------
   PROVENANCE
@@ -96,29 +129,30 @@
   restriction with an EXISTENTIAL); commit 9726e4c4 "fixed two soundness bugs"
   introduced `isSafetyFormula` as the fix.
 
-  Verified rigorously:
+  Verified directly:
 
     * The body of `isSafetyFormula` at 9726e4c4 (src/Theory/Constraint/System/
       Guarded.hs) and at HEAD (lib/theory/src/.../Guarded.hs) are BYTE
-      IDENTICAL.  The predicate has never been modified.
+      IDENTICAL.  The predicate was never modified.
 
     * `last` was already surface syntax in that same commit: 9726e4c4's
       src/Theory/Text/Parser.hs:340 contains
           [ Last <$> try (symbol "last" *> parens nodevarTerm) <?> "last atom"
 
-  So the fix and the hole shipped together in August 2012, and the hole has
-  been open for the entire lifetime of the fix.
+  So the fix and the hole shipped together in August 2012, and the hole was
+  open for the entire lifetime of the fix.
 
-  SCOPE: no shipped case study is affected -- see the honest-scope note in
-  attacks/02_last_sources_full_chain.spthy.  This is a reachable trap, not
-  evidence that published Tamarin results are wrong.
+  SCOPE: no shipped case study is affected.  All 1042 .spthy files under
+  examples/ were scanned; zero use `last()` in a restriction, which is what
+  this bug requires.  This is a reachable trap, not evidence that published
+  Tamarin results are wrong.  Scanner: tools/lastscan.py.
 
   ---------------------------------------------------------------------------
-  SUGGESTED FIX
+  FIX
   ---------------------------------------------------------------------------
-  One line in Guarded.hs:
+  PR #915.  The load-bearing line is in Guarded.hs:
 
-      noExistential (GAto (Last _)) = False
+      noExistential (GAto a) = not $ isLastAtom a
 
   `toInductionHypothesis` already refuses formulas containing `last`
   (Guarded.hs:619, "formula not last-free"), so reclassifying simply makes

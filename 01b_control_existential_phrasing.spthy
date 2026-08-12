@@ -4,8 +4,8 @@
 ==============================================================================
 
   This is the same protocol and the same lemma as
-  attacks/01_last_induction_unsound.spthy, with the restriction expressed
-  using a guarded existential instead of `last()`.
+  01_last_induction_unsound.spthy, with the restriction expressed using a
+  guarded existential instead of `last()`.
 
   Both restrictions are non-prefix-closed:
 
@@ -47,8 +47,13 @@
   This pair rules out every alternative explanation for PoC 01's wrong
   verdict: it is not the protocol, not the lemma, not induction in general,
   and not non-prefix-closed restrictions in general -- Tamarin handles those
-  correctly, as this file shows.  It is specifically the classification of
+  correctly, as this file shows.  What is left is the classification of
   `last` atoms by isSafetyFormula.
+
+  This also answers the argument that the wrong verdict in PoC 01 follows
+  from illegal input rather than from a defective check.  Both files supply
+  a non-prefix-closed restriction.  One gets the right answer and one does
+  not, and the difference is the classifier.
 
   Note: the most literally equivalent phrasing of `not(last(#i))` would be
   "Ex #j. #i < #j", but Tamarin rejects that as an unguarded existential
@@ -56,8 +61,8 @@
   guard.  This changes the restriction's exact content but not the property
   that matters here: non-prefix-closedness.
 
-  This file is a control and is NOT exercised by run.sh (which only checks
-  that defects still reproduce).  Run it directly:
+  This file is a control and IS exercised by run.sh, which checks that it
+  keeps producing the correct verdicts.  To run it directly:
 
       tamarin-prover --prove 01b_control_existential_phrasing.spthy
 ==============================================================================

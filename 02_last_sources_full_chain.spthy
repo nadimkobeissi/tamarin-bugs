@@ -5,7 +5,10 @@
 
   CLASS      : missed attack (false "verified")
   SEVERITY   : critical -- end-to-end wrong security verdict, fully green report
-  AFFECTS    : tamarin-prover 1.12.0 and develop HEAD (1.13.0)
+  AFFECTS    : tamarin-prover 1.12.0 and develop @ ef3f0468 (1.13.0)
+  STATUS     : same root cause as PoC 01.  Confirmed by the maintainers; fix
+               proposed in PR #915 (open).  Soundness label disputed; see
+               PoC 01 and README.md.
 
   ---------------------------------------------------------------------------
   WHAT THIS ADDS OVER PoC 01
@@ -31,6 +34,13 @@
   sources lemma, which in turn prunes legitimate sources out of the
   precomputation for the entire file.
 
+  Note what makes this a defect rather than the documented behaviour of
+  [sources] lemmas.  A [sources] lemma is an assumption, and a theory whose
+  sources lemma is reported FALSIFIED gives the user that signal: everything
+  downstream is conditional on something visibly unmet.  Here the sources
+  lemma is WRONGLY PROVED, because of the classifier defect in PoC 01, so the
+  precondition looks met and no signal is emitted at all.
+
   ---------------------------------------------------------------------------
   GROUND TRUTH
   ---------------------------------------------------------------------------
@@ -39,7 +49,7 @@
   `bogus_sources` is FALSE.
 
   ---------------------------------------------------------------------------
-  TAMARIN SAYS
+  TAMARIN SAYS (1.12.0, unpatched)
   ---------------------------------------------------------------------------
     bogus_sources (all-traces):   verified (3 steps)   <-- WRONG
     secrecy       (all-traces):   verified (2 steps)   <-- WRONG
@@ -63,33 +73,37 @@
   There is no signal available to the user, at any verbosity, that the
   verdict is wrong.
 
-  ---------------------------------------------------------------------------
-  NOTE ON THE RESTRICTION -- AND HONEST SCOPE
-  ---------------------------------------------------------------------------
-  `GenIsNotLast` is written the way a modeller naturally expresses "the
-  protocol does not stop right after key generation".  `last()` is documented
-  user-facing syntax (manual/src/011_advanced-features.md:576).
+  Deleting only the sources lemma restores `secrecy: falsified`, which
+  confirms the mechanism.
 
-  HOWEVER -- and this bounds the practical impact, so do not overstate it in
-  the paper:
+  ---------------------------------------------------------------------------
+  NOTE ON THE RESTRICTION -- AND SCOPE
+  ---------------------------------------------------------------------------
+  `GenIsNotLast` is written the way a modeller would express "the protocol
+  does not stop right after key generation".  The manual's machine-tested
+  grammar accepts `last()` in the body of a restriction; see the DISPUTE
+  section of PoC 01.
+
+  HOWEVER -- and this bounds the practical impact, so do not overstate it:
 
     NO SHIPPED CASE STUDY IS AFFECTED.
 
-  We scanned all 1042 .spthy files under examples/.  36 contain the string
+  All 1042 .spthy files under examples/ were scanned.  36 contain the string
   "last(".  In every one of them the occurrence is inside Tamarin's OWN
   machine-generated proof text (lines such as
   `solve( (last(#i)) | (Ex #j. Update(k,r) @ #j & ...) )`, emitted by the
-  induction rule and saved into the analyzed output), never in a
-  user-written restriction.  Zero case studies put `last()` in a restriction,
-  which is what this bug requires.
+  induction rule and saved into the analyzed output), never in a user-written
+  restriction.  Zero case studies put `last()` in a restriction, which is what
+  this bug requires.
 
-  So the correct claim is: this is a live, reachable unsoundness in documented
-  syntax that currently affects no published Tamarin result.  It is a trap
-  waiting for a user, not evidence that existing verification results are
-  wrong.  (Scanner: attacks/tools/lastscan.py.)
+  So the accurate claim is: a live, reachable unsoundness in syntax the
+  grammar accepts, which currently affects no published Tamarin result.  It is
+  a trap waiting for a user, not evidence that existing verification results
+  are wrong.  Anyone citing this should say so in those words.
+  (Scanner: tools/lastscan.py.)
 
-  See attacks/01_last_induction_unsound.spthy for the root cause analysis and
-  the control experiment that isolates the mechanism.
+  See 01_last_induction_unsound.spthy for the root cause analysis, the control
+  experiment that isolates the mechanism, and the soundness-label dispute.
 ==============================================================================
 */
 

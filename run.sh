@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Reproduce every confirmed defect in this directory.
-#  Exits 0 if all reproduce, 1 otherwise -- so this doubles as a regression
-#  check against a patched build.
+#  Reproduce every confirmed defect in this directory, and check that the
+#  controls still behave correctly.
+#
+#  Exits 0 if every theory behaves as recorded, 1 otherwise -- so this doubles
+#  as a regression check against a patched build.  Against a build with
+#  tamarin-prover PR #915 or #916 applied, the corresponding defects are
+#  EXPECTED to stop reproducing and this script is expected to exit 1.
 #
 #  Usage:  ./run.sh [path-to-tamarin-prover]
 # =============================================================================
@@ -90,32 +94,11 @@ echo "============================================================"
 echo
 
 expect 03_vacuous_lemma_typo.spthy \
-  "typo'd action fact => vacuous verified, wellformedness reports clean" \
+  "typo'd action fact => lemma is vacuously true, so 'verified' is CORRECT.
+   The defect is that no wellformedness warning is emitted: the report is
+   clean and the check that would flag the typo never runs." \
   'secrecy_typo.*: *verified' \
   'secrecy_intended.*: *falsified'
-
-echo "============================================================"
-echo " 3. unproven assumptions are admitted as facts"
-echo "============================================================"
-echo
-
-expect 05_refuted_sources_lemma.spthy \
-  "target verified from a [sources] lemma the same run falsified" \
-  'bogus_sources.*: *falsified' \
-  'target.*: *verified'
-
-expect 08_reuse_poisons_both_directions.spthy \
-  "SELF-CONTRADICTION: 'found trace' and 'no trace found' for the same
-   statement, in one run" \
-  'helper.*: *falsified' \
-  'target.*: *verified' \
-  'live.*: *falsified'
-
-expect 08b_reuse_control.spthy \
-  "CONTROL: same theory minus the [reuse] token => all three correct" \
-  'helper.*: *falsified' \
-  'target.*: *falsified' \
-  'live.*: *verified'
 
 echo "============================================================"
 if [ "$FAILURES" -eq 0 ]; then

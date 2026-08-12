@@ -3,10 +3,32 @@
   PoC 03 -- the vacuity wellformedness checks are dead code
 ==============================================================================
 
-  CLASS      : missed attack (vacuous "verified", no warning)
-  SEVERITY   : high -- Tamarin's only guard against the most common modelling
-                       error is unreachable
-  AFFECTS    : tamarin-prover 1.12.0 and develop HEAD (1.13.0)
+  CLASS      : missing diagnostic.  NOT a wrong verdict -- see below.
+  SEVERITY   : high -- Tamarin's only automatic guard against the most common
+                       modelling error is unreachable
+  AFFECTS    : tamarin-prover 1.12.0 and develop @ ef3f0468 (1.13.0)
+  STATUS     : confirmed by the maintainers; fix proposed in PR #916 (open).
+
+  ---------------------------------------------------------------------------
+  CORRECTION TO EARLIER VERSIONS OF THIS FILE
+  ---------------------------------------------------------------------------
+  Earlier drafts classified this as a "missed attack" and listed
+  `secrecy_typo: verified` as a wrong verdict.  That was an error.
+
+  No rule emits `SecrettKey`, so `secrecy_typo` quantifies over an empty set
+  and is VACUOUSLY TRUE.  `verified` is the correct answer to the question the
+  lemma actually asks.  Tamarin's logic is right here.
+
+  From the maintainers:
+
+      "In theory 3, the property proven true is in fact true. But you are
+       right that a warning should be generated to inform the user about the
+       modeling mistake."
+
+  The defect is that Tamarin ships a check for exactly this modelling error
+  and the check never runs.  The user writes a lemma they believe says one
+  thing, Tamarin proves a different and empty thing, and every diagnostic
+  channel reports success.
 
   ---------------------------------------------------------------------------
   ROOT CAUSE
@@ -32,6 +54,9 @@
   (Wellformedness.hs:706-734) never execute in the shipped tool.  They are
   fully implemented, with error messages, and unreachable.
 
+  Either reading condemns the code.  Under the docstring's intent the guard is
+  backwards; under the guard's literal meaning the flag is set wrongly.
+
   ---------------------------------------------------------------------------
   REGRESSION PROVENANCE
   ---------------------------------------------------------------------------
@@ -45,20 +70,21 @@
             specialFactsUsage, factUsage, factLhsOccurNoRhs,
             inexistentActions, inexistentActionsRestrictions ]
 
-  An unrelated export-backend refactor silently disabled a working soundness
-  guardrail.
+  An unrelated export-backend refactor disabled a working guardrail, and no
+  test noticed, because the suite compares end-to-end verdicts on case studies
+  and no case study depends on those checks firing.
 
   ---------------------------------------------------------------------------
   GROUND TRUTH
   ---------------------------------------------------------------------------
-  No rule in this theory ever emits `SecrettKey`.  `secrecy_typo` therefore
-  quantifies over an empty set and is vacuously true -- it asserts nothing.
-  The property the modeller meant to state (`secrecy_intended`) is false.
+  `secrecy_typo` is vacuously TRUE and Tamarin correctly reports it verified.
+  `secrecy_intended` is FALSE and Tamarin correctly reports it falsified.
+  Both verdicts are right.  The missing output is the warning.
 
   ---------------------------------------------------------------------------
-  TAMARIN SAYS
+  TAMARIN SAYS (1.12.0, unpatched)
   ---------------------------------------------------------------------------
-    secrecy_typo     (all-traces): verified (2 steps)   <-- vacuous
+    secrecy_typo     (all-traces): verified (2 steps)   <-- correct, and vacuous
     secrecy_intended (all-traces): falsified - found trace (3 steps)
     /* All wellformedness checks were successful. */
 
@@ -66,15 +92,10 @@
   the check that would produce it never runs.
 
   ---------------------------------------------------------------------------
-  SUGGESTED FIX
+  FIX
   ---------------------------------------------------------------------------
-  Invert the guard to match the docstring:
-
-      ++ concat [ inexistentActions ++ inexistentActionsRestrictions
-                | not incompleteMSRs ]
-
-  (and resolve the TODO at TheoryLoader.hs:602 so translated theories set the
-  flag correctly rather than always False).
+  PR #916, which removes the `incompleteMSRs` flag entirely rather than
+  inverting the guard, and resolves the TODO at TheoryLoader.hs:602.
 ==============================================================================
 */
 
@@ -84,7 +105,8 @@ rule Setup: [ Fr(k)   ] --[ SecretKey(k) ]-> [ Key(k) ]
 rule Leak:  [ Key(k)  ] --[ Leaked(k)    ]-> [ Out(k) ]
 
 // TYPO: the rules emit "SecretKey", this lemma says "SecrettKey".
-// No rule has such an action, so the lemma is vacuously true.
+// No rule has such an action, so the lemma is vacuously true. Tamarin's
+// "verified" is correct; the missing output is a warning about the typo.
 lemma secrecy_typo:
   "All k #i. SecrettKey(k) @ i ==> not(Ex #j. K(k) @ j)"
 
