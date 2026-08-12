@@ -8,7 +8,7 @@ Every verdict quoted below is actual tool output, not expected output.
 
 ## Status
 
-All findings here were reported to the Tamarin maintainers by email on 12 August
+All findings here were reported to the Tamarin maintainers by email on 11 August
 2026 and, at their request, in
 [issue #917](https://github.com/tamarin-prover/tamarin-prover/issues/917). Felix
 Linker responded the same day. The full timeline and correspondence is in
